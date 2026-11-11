@@ -1,0 +1,202 @@
+groups:
+  - name: mirrorcore-runtime
+    rules:
+      - alert: MirrorCoreMetricsTargetDown
+        expr: up{job=~"mirrorcore-api|mirrorcore-background"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore metrics target is down"
+          description: "Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}."
+
+      - alert: MirrorCoreAPIHigh5xxRate
+        expr: |
+          sum by (service) (rate(mirrorcore_http_requests_total{service="api", status=~"5.."}[5m]))
+          /
+          clamp_min(sum by (service) (rate(mirrorcore_http_requests_total{service="api"}[5m])), 0.01)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore API 5xx rate is elevated"
+          description: "More than 5% of API requests have returned 5xx for five minutes."
+
+      - alert: MirrorCoreDBPoolNearCapacity
+        expr: |
+          mirrorcore_db_pool_acquired_connections
+          /
+          clamp_min(mirrorcore_db_pool_max_connections, 1)
+          > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore PostgreSQL pool is near capacity"
+          description: "The {{ $labels.service }} process has acquired more than 85% of its configured pool for five minutes."
+
+      - alert: MirrorCoreDBPoolAcquireCanceled
+        expr: increase(mirrorcore_db_pool_canceled_acquires_total[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore canceled a PostgreSQL pool acquire"
+          description: "A request waiting for a PostgreSQL connection was canceled in the last five minutes."
+
+      - alert: MirrorCoreProviderRateLimited
+        expr: increase(mirrorcore_provider_calls_total{outcome="failure", error_class="rate_limited"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore provider returned HTTP 429"
+          description: "{{ $labels.model }} was rate limited in the {{ $labels.service }} process."
+
+      - alert: MirrorCoreProviderQuotaWaitHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, service, model) (rate(mirrorcore_provider_quota_wait_seconds_bucket[5m]))
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore provider quota waits are long"
+          description: "The p95 quota wait for {{ $labels.model }} exceeds five seconds."
+
+      - alert: MirrorCoreProviderQuotaLedgerWriteFailed
+        expr: increase(mirrorcore_provider_quota_persistence_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore could not persist provider quota state"
+          description: "The {{ $labels.service }} process failed to persist a {{ $labels.operation }} record for {{ $labels.model }}."
+
+      - alert: MirrorCoreProviderQuotaPruneFailed
+        expr: increase(mirrorcore_provider_quota_prune_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore provider quota ledger pruning failed"
+          description: "The {{ $labels.service }} process could not prune expired provider quota reservations."
+
+      - alert: MirrorCoreWorkerStageFailed
+        expr: increase(mirrorcore_worker_stage_runs_total{outcome=~"failure|lease_lost"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore worker stage failed or lost its lease"
+          description: "{{ $labels.worker }} stage {{ $labels.stage }} reported {{ $labels.outcome }} in {{ $labels.service }}."
+
+      - alert: MirrorCoreQueueSnapshotFailed
+        expr: mirrorcore_db_queue_scrape_error{service="background"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore could not collect durable queue state"
+          description: "The background process cannot query queue metrics from PostgreSQL."
+
+      - alert: MirrorCoreParseTaskQueueStale
+        expr: mirrorcore_db_queue_oldest_age_seconds{queue="parse_task",state=~"WAIT_DISPATCH|READY|WAITING|RETRY_WAIT"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore parse task queue is stale"
+          description: "The oldest due parse task in state {{ $labels.state }} has waited over five minutes."
+
+      - alert: MirrorCoreOutboxStale
+        expr: mirrorcore_db_queue_oldest_age_seconds{queue="outbox",state=~"PENDING|SENDING"} > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore outbox delivery is delayed"
+          description: "The oldest due outbox event has been waiting over two minutes."
+
+      - alert: MirrorCoreOutboxFailedEvents
+        expr: mirrorcore_db_queue_items{queue="outbox",state="FAILED"} > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore has failed outbox events"
+          description: "At least one outbox event exhausted relay attempts and needs review."
+
+      - alert: MirrorCoreContentJobsFailed
+        expr: mirrorcore_db_queue_items{service="background",queue="content_job",state="FAILED"} > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore has failed content jobs"
+          description: "A content job reached a terminal failure and may need investigation or a new revision."
+
+      - alert: MirrorCoreKafkaLagSnapshotFailed
+        expr: mirrorcore_kafka_lag_scrape_error{service="background"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore could not collect Kafka consumer lag"
+          description: "The background process cannot read Kafka partition or committed consumer offsets."
+
+      - alert: MirrorCoreKafkaConsumerLagHigh
+        expr: sum by (service, group, topic) (mirrorcore_kafka_consumer_group_lag_records) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore Kafka consumer lag is high"
+          description: "Consumer group {{ $labels.group }} is more than 100 records behind topic {{ $labels.topic }}."
+
+      - alert: MirrorCoreKafkaOffsetExpired
+        expr: mirrorcore_kafka_consumer_offset_behind_start{service="background"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore Kafka consumer offset is outside retention"
+          description: "Consumer group {{ $labels.group }} has an offset before the retained start of {{ $labels.topic }} partition {{ $labels.partition }}."
+
+      - alert: MirrorCoreExpiredWorkLease
+        expr: mirrorcore_db_queue_expired_leases{queue=~"parse_task|content_job|video_deletion"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore has expired work leases"
+          description: "Expired work leases are present in {{ $labels.queue }} ({{ $labels.state }})."
+
+      - alert: MirrorCoreASRDeadlineOverdue
+        expr: mirrorcore_db_queue_overdue_deadlines{queue="asr_remote"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore ASR remote deadline has passed"
+          description: "An active ASR submission exceeded its persisted provider deadline."
+
+      - alert: MirrorCoreDeletionQueueStale
+        expr: mirrorcore_db_queue_oldest_age_seconds{queue="video_deletion",state=~"PENDING|RETRY_WAIT"} > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MirrorCore video deletion is delayed"
+          description: "The oldest deletion job has been due for over ten minutes."
+
+      - alert: MirrorCoreASRUnknownWithoutTaskID
+        expr: mirrorcore_db_queue_oldest_age_seconds{queue="asr_remote",state="unknown_no_task_id"} > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MirrorCore ASR submission cannot be reconciled automatically"
+          description: "An UNKNOWN submission without a provider task ID needs manual or provider-side verification."

@@ -1,0 +1,694 @@
+openapi: 3.1.0
+info:
+  title: MirrorCore API
+  version: 0.1.0
+  description: |
+    MirrorCore video voice-content, parsing, fixed-result Q&A and controlled Agent API.
+    Mutating cookie-authenticated endpoints require X-CSRF-Token. Normal JSON responses
+    use {data, request_id}; errors use {error, request_id}. The question endpoint streams
+    progress and only emits a complete answer after validation and persistence.
+servers:
+  - url: /
+security:
+  - SessionCookie: []
+tags:
+  - name: system
+  - name: session
+  - name: videos
+  - name: uploads
+  - name: parse-tasks
+  - name: conversations
+  - name: questions
+  - name: content
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      security: []
+      summary: Check API process liveness
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+  /readyz:
+    get:
+      tags: [system]
+      security: []
+      summary: Check API and PostgreSQL readiness
+      responses:
+        '200':
+          description: API is ready
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /openapi.yaml:
+    get:
+      tags: [system]
+      security: []
+      summary: Download this OpenAPI document
+      responses:
+        '200':
+          description: OpenAPI YAML document
+          content:
+            application/yaml:
+              schema: {type: string}
+  /v1/sessions:
+    post:
+      tags: [session]
+      security: []
+      summary: Create a login session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '201':
+          description: Session created; sets HttpOnly session cookie
+          headers:
+            Set-Cookie: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /v1/session:
+    delete:
+      tags: [session]
+      summary: Revoke the current session
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      responses:
+        '200': {description: Session revoked}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/videos:
+    get:
+      tags: [videos]
+      summary: List the current user's active videos
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - in: query
+          name: cursor
+          schema: {type: string}
+          description: Opaque cursor returned by the previous page
+      responses:
+        '200':
+          description: Current user's active videos and optional next-page cursor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/SuccessEnvelope'}
+                  - type: object
+                    properties:
+                      data: {$ref: '#/components/schemas/VideoPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /v1/videos/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [videos]
+      summary: Read a video and its latest task and active result
+      responses:
+        '200':
+          description: Video state and current resource pointers
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/SuccessEnvelope'}
+                  - type: object
+                    properties:
+                      data: {$ref: '#/components/schemas/Video'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      tags: [videos]
+      summary: Disable a video immediately and schedule asynchronous deletion
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      responses:
+        '202': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/videos/{id}/playback:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [videos]
+      summary: Issue a short-lived authorized playback URL
+      parameters:
+        - in: query
+          name: question_id
+          schema: {type: string, format: uuid}
+        - in: query
+          name: evidence_id
+          schema: {type: string, pattern: '^E[1-9][0-9]*$'}
+        - in: query
+          name: content_artifact_id
+          schema: {type: string, format: uuid}
+        - in: query
+          name: content_ref_id
+          schema: {type: string, pattern: '^CREF[1-9][0-9]*$'}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /v1/videos/{id}/parse-tasks:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [parse-tasks]
+      summary: Create a new task version for parsing a video
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateParseTaskRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/Success'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/video-deletions/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [videos]
+      summary: Read asynchronous video deletion progress and blockers
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/uploads:
+    post:
+      tags: [uploads]
+      summary: Create an OSS multipart upload session
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateUploadRequest'}
+      responses:
+        '201': {$ref: '#/components/responses/Success'}
+        '202': {$ref: '#/components/responses/Success'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/uploads/lookup:
+    get:
+      tags: [uploads]
+      summary: Find an upload session by its idempotency key
+      parameters:
+        - {$ref: '#/components/parameters/ClientRequestKey'}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/uploads/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [uploads]
+      summary: Read upload state and confirmed multipart progress
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      tags: [uploads]
+      summary: Request cancellation and asynchronous multipart cleanup
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      responses:
+        '202': {$ref: '#/components/responses/Success'}
+  /v1/uploads/{id}/part-urls:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [uploads]
+      summary: Issue signed URLs for a bounded list of multipart part numbers
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [part_numbers]
+              properties:
+                part_numbers: {type: array, minItems: 1, maxItems: 50, items: {type: integer, minimum: 1}}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/uploads/{id}/complete:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [uploads]
+      summary: Verify uploaded parts and atomically create the initial parse task
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    required: [part_number, etag]
+                    properties:
+                      part_number: {type: integer, minimum: 1}
+                      etag: {type: string}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '202': {$ref: '#/components/responses/Success'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/parse-tasks/lookup:
+    get:
+      tags: [parse-tasks]
+      summary: Find a parse task by its creation idempotency key
+      parameters:
+        - {$ref: '#/components/parameters/ClientRequestKey'}
+      responses:
+        '200':
+          description: Task state and committed stage progress
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/SuccessEnvelope'}
+                  - type: object
+                    properties:
+                      data: {$ref: '#/components/schemas/ParseTask'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/parse-tasks/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [parse-tasks]
+      summary: Read task state, retry eligibility and committed stage progress
+      responses:
+        '200':
+          description: Task state
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/SuccessEnvelope'}
+                  - type: object
+                    properties:
+                      data: {$ref: '#/components/schemas/ParseTask'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/parse-tasks/{id}/retry:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [parse-tasks]
+      summary: Continue one recoverable failed task without changing task_version
+      description: |
+        At most one manual continuation is allowed per task. A repeated Idempotency-Key
+        replays the original action. Stage checkpoints are retained, ordinary failed-stage
+        counters are reset, and the ASR submission budget is never reset.
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '202':
+          description: Retry scheduled on the same task and version
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+        '200':
+          description: Idempotent replay
+          headers:
+            Idempotency-Replayed: {schema: {type: string, enum: ['true']}}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/parse-tasks/{id}/cancel:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [parse-tasks]
+      summary: Cancel a nonterminal task and fence its current execution epoch
+      description: A running Worker observes lease loss and stops; a remote ASR task is not claimed to be cancelled.
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      responses:
+        '202': {$ref: '#/components/responses/Success'}
+        '200': {description: Task was already terminal; current state is returned}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/results/{id}/content:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [content]
+      summary: Read content revision status for a parse result
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/results/{id}/content-jobs:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [content]
+      summary: Create an idempotent content revision job
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '202': {$ref: '#/components/responses/Success'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/content-jobs/lookup:
+    get:
+      tags: [content]
+      summary: Find a content job by creation key
+      parameters:
+        - {$ref: '#/components/parameters/ClientRequestKey'}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/content-jobs/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [content]
+      summary: Read content job progress
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/content-artifacts/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [content]
+      summary: Read an immutable overview and chapter artifact
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/conversations/lookup:
+    get:
+      tags: [conversations]
+      summary: Find a conversation by creation key
+      parameters:
+        - {$ref: '#/components/parameters/ClientRequestKey'}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/videos/{id}/conversations:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [conversations]
+      summary: List conversations for a video
+      parameters:
+        - {$ref: '#/components/parameters/PageLimit'}
+        - in: query
+          name: cursor
+          schema: {type: string}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+    post:
+      tags: [conversations]
+      summary: Create an idempotent conversation
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  maxLength: 512
+                  description: Optional conversation title; the server limits its UTF-8 encoding to 512 bytes.
+      responses:
+        '201': {$ref: '#/components/responses/Success'}
+        '200': {description: Idempotent replay}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/conversations/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    delete:
+      tags: [conversations]
+      summary: Archive a conversation and interrupt unfinished questions
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/conversations/{id}/questions:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [conversations]
+      summary: List questions and completed answers in a conversation
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/videos/{id}/questions:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [questions]
+      summary: Ask a question against the result fixed at admission
+      description: Uses Fetch-readable SSE; answer text is sent only after validation and database commit.
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                conversation_id: {type: string, format: uuid}
+                question:
+                  type: string
+                  minLength: 1
+                  maxLength: 4096
+                  description: Trimmed question text; the server limits its UTF-8 encoding to 4096 bytes.
+      responses:
+        '200':
+          description: SSE events accepted, progress, answer, done, or error
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/questions/lookup:
+    get:
+      tags: [questions]
+      summary: Find a question by client request key
+      parameters:
+        - {$ref: '#/components/parameters/ClientRequestKey'}
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/questions/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    get:
+      tags: [questions]
+      summary: Read question status and any persisted answer
+      responses:
+        '200': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/questions/{id}/cancel:
+    parameters:
+      - {$ref: '#/components/parameters/ResourceID'}
+    post:
+      tags: [questions]
+      summary: Cancel a running question
+      parameters:
+        - {$ref: '#/components/parameters/CSRFToken'}
+      responses:
+        '202': {$ref: '#/components/responses/Success'}
+        '404': {$ref: '#/components/responses/NotFound'}
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: mirrorcore_session
+  parameters:
+    ResourceID:
+      in: path
+      name: id
+      required: true
+      schema: {type: string, format: uuid}
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 128}
+    CSRFToken:
+      in: header
+      name: X-CSRF-Token
+      required: true
+      schema: {type: string}
+    ClientRequestKey:
+      in: query
+      name: client_request_key
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 128}
+    PageLimit:
+      in: query
+      name: limit
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+  responses:
+    Success:
+      description: Successful response
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    Forbidden:
+      description: CSRF check failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    NotFound:
+      description: Resource not found for the current owner
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    Conflict:
+      description: State or idempotency conflict
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    RateLimited:
+      description: Capacity or quota limit reached
+      headers:
+        Retry-After: {schema: {type: integer}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    ServiceUnavailable:
+      description: A required dependency is unavailable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [data, request_id]
+      properties:
+        data: {type: object, additionalProperties: true}
+        request_id: {type: string, format: uuid}
+    ErrorEnvelope:
+      type: object
+      required: [error, request_id]
+      properties:
+        request_id: {type: string, format: uuid}
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            retryable: {type: boolean}
+            resource_id: {type: string}
+            query_url: {type: string}
+            retry_after_ms: {type: integer, minimum: 0}
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password:
+          type: string
+          minLength: 12
+          maxLength: 72
+          description: Password length is validated by the server in bytes.
+    CreateUploadRequest:
+      type: object
+      required: [file_name, size_bytes, content_type]
+      properties:
+        file_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: An MP4 filename; the server limits its UTF-8 encoding to 255 bytes.
+        size_bytes: {type: integer, minimum: 1, maximum: 2147483648}
+        content_type: {type: string}
+    CreateParseTaskRequest:
+      type: object
+      description: For reuse_mode=recompute_from, recompute_from must be set to the first stage to rebuild.
+      properties:
+        profile_id: {type: string, enum: [voice-v1], default: voice-v1}
+        reuse_mode: {type: string, enum: [reuse_ready, recompute_from], default: reuse_ready}
+        recompute_from: {type: string, enum: [AUDIO, ASR, CHUNK, EMBEDDING]}
+    ParseTask:
+      type: object
+      required: [task_id, video_id, task_version, status, stage, next_run_at, created_at, retry_allowed]
+      properties:
+        task_id: {type: string, format: uuid}
+        video_id: {type: string, format: uuid}
+        task_version: {type: integer, minimum: 1}
+        status: {type: string, enum: [WAIT_DISPATCH, READY, RUNNING, WAITING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}
+        stage: {type: string, enum: [PROBE, AUDIO, ASR, TRANSCRIPT, CHUNK, EMBEDDING, PUBLISH, DONE]}
+        wait_reason: {type: string}
+        next_run_at: {type: string, format: date-time}
+        deadline_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+        retry_allowed: {type: boolean}
+        last_error:
+          type: object
+          properties:
+            code: {type: string}
+            retryable: {type: boolean}
+        stage_progress:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/TaskStageProgress'
+    TaskStageProgress:
+      type: object
+      required: [state, failure_count, committed_count, expected_count]
+      properties:
+        state: {type: string}
+        failure_count: {type: integer, minimum: 0}
+        committed_count: {type: integer, minimum: 0}
+        expected_count: {type: integer, minimum: 0}
+    VideoPage:
+      type: object
+      required: [videos]
+      properties:
+        videos:
+          type: array
+          items: {$ref: '#/components/schemas/Video'}
+        next_cursor: {type: string}
+    Video:
+      type: object
+      required: [video_id, file_state, lifecycle, source_name, source_size_bytes, created_at]
+      properties:
+        video_id: {type: string, format: uuid}
+        file_state: {type: string, enum: [UPLOADING, UPLOADED, VALID, REJECTED, EXPIRED, CANCELLED]}
+        lifecycle: {type: string, enum: [ACTIVE, DELETING, DELETED]}
+        source_name: {type: string}
+        source_size_bytes: {type: integer, minimum: 0}
+        latest_task: {$ref: '#/components/schemas/ParseTask'}
+        active_result_id: {type: string, format: uuid}
+        created_at: {type: string, format: date-time}

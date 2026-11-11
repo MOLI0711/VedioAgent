@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+/bin/
+/tmp/
+/.localdemo-media-tmp/
+/.localdemo-current-source/
+/coverage.out
+/api
+/output/
+/outputs/
+/work/
+.DS_Store
+*.log
+*.test

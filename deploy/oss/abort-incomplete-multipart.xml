@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LifecycleConfiguration>
+  <Rule>
+    <ID>mirrorcore-abort-incomplete-source-uploads</ID>
+    <Prefix>source/</Prefix>
+    <Status>Enabled</Status>
+    <AbortMultipartUpload>
+      <Days>3</Days>
+    </AbortMultipartUpload>
+  </Rule>
+</LifecycleConfiguration>

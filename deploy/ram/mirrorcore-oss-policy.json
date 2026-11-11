@@ -1,0 +1,31 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:ListObjectVersions"
+      ],
+      "Resource": [
+        "acs:oss:*:*:mirrorcore-dev-20261111-b7f6"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:PutObject",
+        "oss:GetObject",
+        "oss:GetObjectVersion",
+        "oss:DeleteObject",
+        "oss:DeleteObjectVersion",
+        "oss:ListParts",
+        "oss:AbortMultipartUpload"
+      ],
+      "Resource": [
+        "acs:oss:*:*:mirrorcore-dev-20261111-b7f6/source/*",
+        "acs:oss:*:*:mirrorcore-dev-20261111-b7f6/artifacts/audio/*",
+        "acs:oss:*:*:mirrorcore-dev-20261111-b7f6/artifacts/asr/*"
+      ]
+    }
+  ]
+}
