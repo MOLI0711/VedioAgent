@@ -1358,3 +1358,5 @@ PostgreSQL最终状态断言：唯一task为version 1，唯一source blob、唯�
 预览可编辑片段与独立浏览器导出页存入`web/preview/`；它不连接真实后端。`.gitignore`补充个人输出目录、临时工作目录、日志和系统文件，排除已有简历PDF；云端.env、密钥、运行截图、媒体scratch及二进制均不提交。提交前扫描实际本机凭据的精确匹配和常见凭据模式，不输出密钥。
 
 本轮`go test -count=1 -v ./...`、`go build ./...`、`go vet ./...`全部退出0，10个PostgreSQL/Kafka集成测试因未配置依赖而SKIP；没有启动数据库/Kafka或调用云模型。预览JavaScript语法与HTML导出检查通过。同步采用新分支，保留远程main；不强推、不部署。最终推送结果以远程分支与本地提交SHA一致为确认依据。
+
+推送确认：首次源码提交`fadb289`已到达`origin/codex/mirrorcore-import-20261111`，通过`git ls-remote`核对完整SHA与本地一致；当时工作区干净。随后同步主设计的Git状态与桌面副本，保留main及既有文档历史。
